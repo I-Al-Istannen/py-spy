@@ -23,6 +23,9 @@ pub struct Config {
     #[doc(hidden)]
     pub type_checks: TypesConfig,
 
+    /// Whether or not to also print native-only threads. Using this implies `native`.
+    pub native_all: bool,
+
     // The following config options only apply when using py-spy as an application
     #[doc(hidden)]
     pub command: String,
@@ -141,6 +144,7 @@ impl Default for Config {
             duration: RecordDuration::Unlimited,
             native: false,
             type_checks: TypesConfig::Disabled,
+            native_all: false,
             gil_only: false,
             include_idle: false,
             include_thread_ids: false,
@@ -182,9 +186,16 @@ impl Config {
             .help("Collect stack traces from native extensions written in Cython, C or C++")
             .action(ArgAction::SetTrue);
 
+        let mut native_all = Arg::new("native-all")
+            .short('N')
+            .long("native-all")
+            .help("Collect stack traces from native-only threads. Implies `--native`.")
+            .action(ArgAction::SetTrue);
+
         // Only show `--native` on platforms where it's supported
         if !cfg!(feature = "unwind") {
             native = native.hide(true);
+            native_all = native_all.hide(true);
         }
 
         #[cfg(not(target_os="freebsd"))]
@@ -371,9 +382,9 @@ impl Config {
         let top = top.arg(type_checks.clone());
         let dump = dump.arg(type_checks);
 
-        let record = record.arg(native.clone());
-        let top = top.arg(native.clone());
-        let dump = dump.arg(native.clone());
+        let record = record.arg(native.clone()).arg(native_all.clone());
+        let top = top.arg(native.clone()).arg(native_all.clone());
+        let dump = dump.arg(native.clone()).arg(native_all.clone());
 
         // Nonblocking isn't an option for freebsd, remove
         #[cfg(not(target_os = "freebsd"))]
@@ -498,7 +509,8 @@ impl Config {
             TypesConfig::Disabled
         };
         if cfg!(feature = "unwind") {
-            config.native = matches.get_flag("native");
+            config.native_all = matches.get_flag("native-all");
+            config.native = config.native_all || matches.get_flag("native");
         }
 
         config.capture_output = config.command != "record" || matches.get_flag("capture");
@@ -645,6 +657,31 @@ mod tests {
 
         let config = get_config("py-spy record --pid 1234 --type-check").unwrap();
         assert_eq!(config.type_checks, TypesConfig::AllowSubclasses);
+    }
+
+    // without unwind support passing --native exits the process
+    #[cfg(feature = "unwind")]
+    #[test]
+    fn test_parse_native_args() {
+        let config = get_config("py-spy dump --pid 1234").unwrap();
+        assert_eq!(config.native, false);
+        assert_eq!(config.native_all, false);
+
+        let config = get_config("py-spy dump --pid 1234 --native").unwrap();
+        assert_eq!(config.native, true);
+        assert_eq!(config.native_all, false);
+
+        // --native-all implies --native
+        for cmd in [
+            "py-spy dump --pid 1234 --native-all",
+            "py-spy record --pid 1234 --native-all",
+            "py-spy top --pid 1234 --native-all",
+            "py-spy dump --pid 1234 -N",
+        ] {
+            let config = get_config(cmd).unwrap();
+            assert_eq!(config.native_all, true, "{}", cmd);
+            assert_eq!(config.native, true, "{}", cmd);
+        }
     }
 
     #[test]

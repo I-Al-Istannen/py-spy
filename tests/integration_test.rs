@@ -159,6 +159,61 @@ fn test_thread_reuse() {
     assert!(errors <= 3);
 }
 
+#[cfg(all(feature = "unwind", target_os = "linux"))]
+#[test]
+fn test_native_all() {
+    // native_only_thread.py starts a thread through pthread_create that only runs
+    // libc's pause(), so it has no python frames. It should show up only with native_all.
+    const NATIVE_THREAD_NAME: &str = "pyspy-native";
+
+    let native_only_traces = |native_all: bool| {
+        let config = Config {
+            native: true,
+            native_all,
+            ..Default::default()
+        };
+        let mut runner = StepRunner::new(config, "./tests/scripts/native_only_thread.py");
+        let traces = runner.spy.get_stack_traces().unwrap();
+
+        // the python main thread should be reported exactly once, and not again as a
+        // native-only thread
+        let python_threads: Vec<_> = traces
+            .iter()
+            .filter(|t| t.frames.iter().any(|f| f.name == "<module>"))
+            .collect();
+        assert_eq!(python_threads.len(), 1);
+        let main_tid = python_threads[0].os_thread_id;
+        assert_eq!(
+            traces.iter().filter(|t| t.os_thread_id == main_tid).count(),
+            1
+        );
+
+        traces
+            .into_iter()
+            .filter(|t| t.thread_name.as_deref() == Some(NATIVE_THREAD_NAME))
+            .collect::<Vec<_>>()
+    };
+
+    let traces = native_only_traces(true);
+    assert_eq!(traces.len(), 1, "native-only thread not found");
+    let trace = &traces[0];
+    assert!(trace.os_thread_id.is_some());
+    assert!(!trace.owns_gil);
+    assert!(!trace.active);
+    assert!(
+        trace.frames.iter().all(|f| !f.filename.ends_with(".py")),
+        "native-only thread has python frames: {:?}",
+        trace.frames
+    );
+    assert!(
+        trace.frames.iter().any(|f| f.name.contains("pause")),
+        "expected the native-only thread to be in pause(): {:?}",
+        trace.frames
+    );
+
+    assert!(native_only_traces(false).is_empty());
+}
+
 #[test]
 fn test_long_sleep() {
     #[cfg(target_os = "macos")]

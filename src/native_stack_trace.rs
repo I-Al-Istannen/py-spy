@@ -1,15 +1,15 @@
-use anyhow::Error;
-use std::collections::HashSet;
+use anyhow::{Context, Error};
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 
 use cpp_demangle::{BorrowedSymbol, DemangleOptions};
 use lazy_static::lazy_static;
 use lru::LruCache;
-use remoteprocess::{self, Pid};
+use remoteprocess::{self, Pid, Tid};
 
 use crate::binary_parser::BinaryInfo;
 use crate::cython;
-use crate::stack_trace::Frame;
+use crate::stack_trace::{Frame, StackTrace};
 use crate::utils::resolve_filename;
 
 pub struct NativeStack {
@@ -253,6 +253,39 @@ impl NativeStack {
         } else {
             MergeType::MergeNativeFrame
         }
+    }
+
+    pub fn add_native_only_threads(
+        &mut self,
+        process: &remoteprocess::Process,
+        traces: &mut Vec<StackTrace>,
+        threads: HashMap<Tid, remoteprocess::Thread>,
+    ) -> Result<(), Error> {
+        // Set of all threads we already processed
+        for (tid, native_thread) in threads {
+            // We are reusing the `merge_native_stack` method and just pass an
+            // empty python stack.
+            let native_stack = self
+                .get_thread(&native_thread)
+                .context("failed to get native thread stack frame pointers")?;
+            let python_stack = Vec::new();
+            let symbolized_stack = self
+                .merge_native_stack(&python_stack, native_stack)
+                .context("failed to merge native-only stack")?;
+
+            // Push new stack trace
+            traces.push(StackTrace {
+                pid: process.pid,
+                thread_id: tid.try_into().unwrap_or(0),
+                thread_name: native_thread.thread_name().ok().flatten(),
+                os_thread_id: tid.try_into().ok(),
+                active: native_thread.active().unwrap_or(false),
+                owns_gil: false,
+                frames: symbolized_stack,
+                process_info: None,
+            });
+        }
+        Ok(())
     }
 
     /// translates a native frame into a optional frame. none indicates we should ignore this frame
