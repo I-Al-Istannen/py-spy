@@ -197,18 +197,24 @@ impl PythonSpy {
     fn _get_stack_traces<I: InterpreterState>(&mut self) -> Result<Vec<StackTrace>, Error> {
         // Query the OS to get if each thread in the process is running or not
         let mut thread_activity = HashMap::new();
+        let mut native_threads = HashMap::new();
         if self.config.gil_only {
             // Don't need to collect thread activity if we're only getting the
             // GIL thread: If we're holding the GIL we're by definition active.
         } else {
-            for thread in self.process.threads()?.iter() {
-                let threadid: Tid = thread.id()?;
-                let Ok(active) = thread.active() else {
-                    // Do not fail all sampling if a single thread died between entering the loop
-                    // and reading its status.
-                    continue;
+            for thread in self.process.threads().context("enum threads")?.into_iter() {
+                let threadid: Tid = thread.id().context("read thread id")?;
+                let active = match thread.active() {
+                    Err(e) => {
+                        // Do not fail all sampling if a single thread died between entering the loop
+                        // and reading its status.
+                        trace!("Failed to get thread activity for {}: {:?}", threadid, e);
+                        continue;
+                    }
+                    Ok(active) => active,
                 };
                 thread_activity.insert(threadid, active);
+                native_threads.insert(threadid, thread);
             }
         }
 
@@ -255,7 +261,8 @@ impl PythonSpy {
                 &self.process,
                 self.config.dump_locals > 0,
                 self.config.lineno,
-            )?;
+            )
+            .context("failed to get stack trace")?;
 
             // Try getting the native thread id
 
@@ -263,8 +270,9 @@ impl PythonSpy {
             // for older versions of python, try using OS specific code to get the native
             // thread id (doesn't work on freebsd, or on arm/i686 processors on linux)
             if trace.os_thread_id.is_none() {
-                let mut os_thread_id =
-                    self._get_os_thread_id::<I>(python_thread_id, threads_head)?;
+                let mut os_thread_id = self
+                    ._get_os_thread_id::<I>(python_thread_id, threads_head)
+                    .context("failed to get os thread id")?;
 
                 // linux can see issues where pthread_ids get recycled for new OS threads,
                 // which totally breaks the caching we were doing here. Detect this and retry
@@ -273,8 +281,9 @@ impl PythonSpy {
                         info!("clearing away thread id caches, thread {} has exited", tid);
                         self.python_thread_ids.clear();
                         self.python_thread_names.clear();
-                        os_thread_id =
-                            self._get_os_thread_id::<I>(python_thread_id, threads_head)?;
+                        os_thread_id = self
+                            ._get_os_thread_id::<I>(python_thread_id, threads_head)
+                            .context("failed to get os thread id (cache invalidate)")?;
                     }
                 }
 
@@ -292,6 +301,11 @@ impl PythonSpy {
                 if let Some(active) = thread_activity.get(&id as _) {
                     trace.active = *active;
                 }
+            }
+
+            // remove non-native threads from the list
+            if let Some(id) = trace.os_thread_id {
+                native_threads.remove(&(id as Tid));
             }
 
             // fallback to using a heuristic if we think the thread is still active
@@ -312,8 +326,11 @@ impl PythonSpy {
                         let thread_id = trace
                             .os_thread_id
                             .ok_or_else(|| format_err!("failed to get os threadid"))?;
-                        let os_thread = remoteprocess::Thread::new(thread_id as Tid)?;
-                        trace.frames = native.merge_native_thread(&trace.frames, &os_thread)?
+                        let os_thread = remoteprocess::Thread::new(thread_id as Tid)
+                            .context("failed to create native thread")?;
+                        trace.frames = native
+                            .merge_native_thread(&trace.frames, &os_thread)
+                            .context("failed to merge with native")?
                     }
                 }
             }
@@ -347,6 +364,16 @@ impl PythonSpy {
                 break;
             }
         }
+
+        #[cfg(feature = "unwind")]
+        if self.config.native_all {
+            if let Some(native) = self.native.as_mut() {
+                native
+                    .add_native_only_threads(&self.process, &mut traces, native_threads)
+                    .context("failed to add native only threads")?;
+            }
+        }
+
         Ok(traces)
     }
 

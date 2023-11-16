@@ -18,6 +18,9 @@ pub struct Config {
     /// the native stack traces
     pub native: bool,
 
+    /// Whether or not to also print native-only threads. Using this implies `native`.
+    pub native_all: bool,
+
     // The following config options only apply when using py-spy as an application
     #[doc(hidden)]
     pub command: String,
@@ -127,6 +130,7 @@ impl Default for Config {
             sampling_rate: 100,
             duration: RecordDuration::Unlimited,
             native: false,
+            native_all: false,
             gil_only: false,
             include_idle: false,
             include_thread_ids: false,
@@ -165,9 +169,15 @@ impl Config {
             .long("native")
             .help("Collect stack traces from native extensions written in Cython, C or C++");
 
+        let mut native_all = Arg::new("native-all")
+            .short('N')
+            .long("native-all")
+            .help("Collect stack traces from native-only threads. Implies `--native`.");
+
         // Only show `--native` on platforms where it's supported
         if !cfg!(feature = "unwind") {
             native = native.hide(true);
+            native_all = native_all.hide(true);
         }
 
         #[cfg(not(target_os="freebsd"))]
@@ -331,9 +341,9 @@ impl Config {
                     .help("Shell type"),
             );
 
-        let record = record.arg(native.clone());
-        let top = top.arg(native.clone());
-        let dump = dump.arg(native.clone());
+        let record = record.arg(native.clone()).arg(native_all.clone());
+        let top = top.arg(native.clone()).arg(native_all.clone());
+        let dump = dump.arg(native.clone()).arg(native_all.clone());
 
         // Nonblocking isn't an option for freebsd, remove
         #[cfg(not(target_os = "freebsd"))]
@@ -443,7 +453,8 @@ impl Config {
 
         config.full_filenames = matches.occurrences_of("full_filenames") > 0;
         if cfg!(feature = "unwind") {
-            config.native = matches.occurrences_of("native") > 0;
+            config.native_all = matches.occurrences_of("native-all") > 0;
+            config.native = config.native_all || matches.occurrences_of("native") > 0;
         }
 
         config.capture_output = config.command != "record" || matches.occurrences_of("capture") > 0;
