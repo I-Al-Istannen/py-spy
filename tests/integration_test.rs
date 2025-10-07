@@ -214,6 +214,39 @@ fn test_native_all() {
     assert!(native_only_traces(false).is_empty());
 }
 
+#[cfg(feature = "unwind")]
+#[test]
+fn test_native_dead_threads() {
+    // Threads can exit after py-spy listed them but before it unwinds their native
+    // stacks. Those threads should be skipped, instead of failing the whole sample.
+    // short_lived_threads.py keeps spawning short lived python and native-only threads,
+    // and native_all makes us unwind the native-only threads too.
+    let config = Config {
+        native: true,
+        native_all: true,
+        ..Default::default()
+    };
+    let mut runner = StepRunner::new(config, "./tests/scripts/short_lived_threads.py");
+
+    let mut errors = Vec::new();
+    let samples = 1000;
+    for _ in 0..samples {
+        if let Err(e) = runner.spy.get_stack_traces() {
+            errors.push(format!("{:?}", e));
+        }
+    }
+    // Without skipping dead threads most samples fail. A thread that is exiting can still
+    // be visible in /proc while unwinding it already fails, which isn't detected as dead,
+    // so allow a few errors (about 1 in 40 runs sees a single such error).
+    assert!(
+        errors.len() <= 5,
+        "{} of {} samples failed, first error: {}",
+        errors.len(),
+        samples,
+        errors[0]
+    );
+}
+
 #[test]
 fn test_long_sleep() {
     #[cfg(target_os = "macos")]
