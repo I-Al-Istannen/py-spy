@@ -60,11 +60,27 @@ impl NativeStack {
         }
 
         // get the native stack from the thread
-        let native_stack = self.get_thread(thread)?;
+        let native_stack = match self.get_thread(thread) {
+            Ok(s) => s,
+            Err(e) => {
+                if thread.active().is_ok() {
+                    return Err(e);
+                }
+                debug!(
+                    "No native thread stack for pid {} tid {} (dead): {e:?}",
+                    self.process.pid,
+                    thread.id()?
+                );
+                // If we can not get the active state, the thread is probably already dead
+                // => Ignore it
+                Vec::new()
+            }
+        };
 
         // TODO: merging the two stack together could happen outside of thread lock
         self.merge_native_stack(frames, native_stack)
     }
+
     pub fn merge_native_stack(
         &mut self,
         frames: &Vec<Frame>,
@@ -265,12 +281,26 @@ impl NativeStack {
         for (tid, native_thread) in threads {
             // We are reusing the `merge_native_stack` method and just pass an
             // empty python stack.
-            let native_stack = self
+            let native_stack = match self
                 .get_thread(&native_thread)
-                .context("failed to get native thread stack frame pointers")?;
-            let python_stack = Vec::new();
+                .context("failed to get native thread stack frame pointers")
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    // If we can not get the active state, the thread is probably already dead
+                    // => Ignore it
+                    if native_thread.active().is_ok() {
+                        return Err(e);
+                    }
+                    debug!(
+                        "No native thread stack for pid {} tid {} (dead): {e:?}",
+                        self.process.pid, tid
+                    );
+                    continue;
+                }
+            };
             let symbolized_stack = self
-                .merge_native_stack(&python_stack, native_stack)
+                .merge_native_stack(&Vec::new(), native_stack)
                 .context("failed to merge native-only stack")?;
 
             // Push new stack trace
