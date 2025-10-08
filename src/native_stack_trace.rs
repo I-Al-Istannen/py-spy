@@ -290,6 +290,15 @@ impl NativeStack {
                     // If we can not get the active state, the thread is probably already dead
                     // => Ignore it
                     if native_thread.active().is_ok() {
+                        #[cfg(target_os = "linux")]
+                        println!(
+                            "Failed to get info for {tid}: {}",
+                            native_thread
+                                .active_status()
+                                .ok()
+                                .map(|it| it as char)
+                                .unwrap_or('?')
+                        );
                         return Err(e);
                     }
                     debug!(
