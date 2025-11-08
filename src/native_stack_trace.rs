@@ -64,6 +64,16 @@ impl NativeStack {
             Ok(s) => s,
             Err(e) => {
                 if thread.active().is_ok() {
+                    #[cfg(target_os = "linux")]
+                    println!(
+                        "Failed to get info for {}: {}",
+                        thread.id().unwrap(),
+                        thread
+                            .active_status()
+                            .ok()
+                            .map(|it| it as char)
+                            .unwrap_or('?')
+                    );
                     return Err(e);
                 }
                 debug!(

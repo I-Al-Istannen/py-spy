@@ -40,7 +40,9 @@ serde_derive = "1.0"
 serde_json = "1.0"
 rand = "0.8"
 rand_distr = "0.4"
-remoteprocess = { git = "https://github.com/I-Al-Istannen/remoteprocess", rev = "8b3e94775ac8888c7470b82fa3c1d13757bf619a" }
+#remoteprocess = { git = "https://github.com/I-Al-Istannen/remoteprocess", rev = "8b3e94775ac8888c7470b82fa3c1d13757bf619a" }
+remoteprocess = { git = "https://github.com/I-Al-Istannen/remoteprocess", rev = "bf29f9e1b0ac9adecf40bffda07fd767f535b8f4" }
+#remoteprocess = { path = "../remoteprocess" }
 chrono = "0.4.26"
 
 [dev-dependencies]

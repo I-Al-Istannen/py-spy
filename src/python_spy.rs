@@ -330,7 +330,8 @@ impl PythonSpy {
                             .context("failed to create native thread")?;
                         trace.frames = native
                             .merge_native_thread(&trace.frames, &os_thread)
-                            .context("failed to merge with native")?
+                            .context("failed to merge with native")
+                            .unwrap()
                     }
                 }
             }
