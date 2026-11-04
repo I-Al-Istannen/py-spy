@@ -345,15 +345,7 @@ impl NativeStack {
                     None => frame.module.clone(),
                 };
 
-                let mut demangled = None;
-                if func.starts_with('_') {
-                    if let Ok((sym, _)) = BorrowedSymbol::with_tail(func.as_bytes()) {
-                        let options = DemangleOptions::new().no_params().no_return_type();
-                        if let Ok(sym) = sym.demangle_with_options(&options) {
-                            demangled = Some(sym);
-                        }
-                    }
-                }
+                let demangled = demangle(func);
                 let name = demangled.as_ref().unwrap_or(func);
                 if cython::ignore_frame(name) {
                     return None;
@@ -446,4 +438,55 @@ fn ignore_frame(function: &str, module: &str) -> bool {
     }
 
     false
+}
+
+/// Demangles Rust and C++ symbols. Rust comes first, as legacy Rust symbols are valid C++ symbols
+/// too, but the C++ demangler leaves Rust's escapes (`$LT$`, `..`) and hash suffix in the name.
+fn demangle(func: &str) -> Option<String> {
+    if !func.starts_with('_') {
+        return None;
+    }
+    if let Ok(sym) = rustc_demangle::try_demangle(func) {
+        // The alternate format leaves out the hash
+        return Some(format!("{:#}", sym));
+    }
+    let (sym, _) = BorrowedSymbol::with_tail(func.as_bytes()).ok()?;
+    let options = DemangleOptions::new().no_params().no_return_type();
+    sym.demangle_with_options(&options).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::demangle;
+
+    #[test]
+    fn demangles_legacy_rust_symbols() {
+        assert_eq!(
+            demangle("_ZN4core3ptr85drop_in_place$LT$std..rt..lang_start$LT$$LP$$RP$$GT$..$u7b$$u7b$closure$u7d$$u7d$$GT$17h6c3b4bd4b8b5c8f5E").as_deref(),
+            Some("core::ptr::drop_in_place<std::rt::lang_start<()>::{{closure}}>")
+        );
+    }
+
+    #[test]
+    fn demangles_v0_rust_symbols() {
+        assert_eq!(
+            demangle("_RNvMs7_NtCsi1lxAc3hWMM_12polars_async8executorNtB5_8Executor6runner")
+                .as_deref(),
+            Some("<polars_async::executor::Executor>::runner")
+        );
+    }
+
+    #[test]
+    fn demangles_cpp_symbols() {
+        assert_eq!(
+            demangle("_ZNSt6vectorIiSaIiEE9push_backERKi").as_deref(),
+            Some("std::vector<int, std::allocator<int> >::push_back")
+        );
+    }
+
+    #[test]
+    fn leaves_c_symbols_alone() {
+        assert_eq!(demangle("PyObject_Call"), None);
+        assert_eq!(demangle("_PyEval_EvalFrameDefault"), None);
+    }
 }
